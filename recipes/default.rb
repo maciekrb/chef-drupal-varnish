@@ -10,4 +10,5 @@ include_recipe "varnish"
 
 execute "set-varnish-secret" do
   command "echo '#{node['opsworks']['layers']['varnish']['secret']}' > #{node['varnish']['secret_file']}"
+  notifies :reload, 'service[varnish]', :immediately
 end

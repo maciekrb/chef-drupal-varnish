@@ -5,6 +5,7 @@ default['varnish']['user'] = 'varnish'
 default['varnish']['group'] = 'varnish'
 default['varnish']['version'] = "3.0"
 default['varnish']['listen_port'] = 80
+default['varnish']['admin_listen_address'] = node['opsworks']['layers']['varnish']['instances']['baklava']['private_ip']
 
 
 default['varnish']['backend_host'] = node['opsworks']['layers']['php-app']['instances']['lemon-tart']['private_ip']
