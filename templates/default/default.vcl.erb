@@ -1,0 +1,214 @@
+# Drupal optimized Varnish configuration
+# Configuration as recommended by varnish conf @ drupal.org
+#
+
+backend default {
+  .host = "<%= node['varnish']['backend_host'] %>";
+  .port = "<%= node['varnish']['backend_port'] %>";
+  .max_connections = <%= node['varnish']['max_connections'] %>;
+  .connect_timeout = <%= node['varnish']['connect_timeout'] %>;
+  .first_byte_timeout = <%= node['varnish']['first_byte_timeout'] %>;
+  .between_bytes_timeout = <%= node['varnish']['between_bytes_timeout'] %>;
+}
+
+acl purge {
+  "localhost";
+  "<%= node['varnish']['backend_host'] %>";
+}
+acl internal {
+  "192.168.0.0"/24;
+  # For remote access, add your IP address here.
+  #   # Ex: 162.xxx.xx.xx
+}
+
+sub vcl_recv {
+
+  # A great functionality of Varnish is to check
+  # your web server's health and serve stale pages
+  # if necessary. 
+  # In case of web server lag, let's return the 
+  # request with stale content.
+
+  if (req.backend.healthy) {
+    set req.grace = 60s;
+  }
+  else {
+    set req.grace = 30m;
+  }
+
+  # Modify (remove) progress.js request parameters.
+
+  if (req.url ~ "^/misc/progress\.js\?[0-9]+$") {
+      set req.url = "/misc/progress.js";
+  }
+
+  # Modify HTTP X-Forwarded-For header.
+  # This will replace Varnish's IP with actual client's.
+
+  remove req.http.X-Forwarded-For;
+  set    req.http.X-Forwarded-For = client.ip;
+
+  # Check if request is allowed to invoke cache purge.
+
+  if (req.request == "PURGE") {
+    if (!client.ip ~ purge)
+    {
+      # Return Error 405 if not allowed.
+      error 405 "Forbidden - Not allowed.";
+    }
+    return (lookup);
+  }
+
+  # Verify HTTP request methods.
+
+  if (req.request != "GET"    && req.request != "HEAD" &&
+      req.request != "PUT"    && req.request != "POST" &&
+      req.request != "TRACE"  && req.request != "OPTIONS" &&
+      req.request != "DELETE" && req.request != "PURGE") {
+      return (pipe);
+  }
+
+  # Handling of different encoding types.
+
+  if (req.http.Accept-Encoding)
+  {
+    if (req.url ~ "\.(jpg|png|gif|gz|tgz|bz2|tbz|mp3|ogg)$") {
+	remove req.http.Accept-Encoding;
+    }
+    elsif (req.http.Accept-Encoding ~ "gzip")
+    {
+	set req.http.Accept-Encoding = "gzip";
+    }
+    elsif (req.http.Accept-Encoding ~ "deflate")
+    {
+	set req.http.Accept-Encoding = "deflate";
+    }
+    else
+    {
+	remove req.http.Accept-Encoding;
+    }
+  }
+
+  # Force look-up if request is a no-cache request.     
+  if (req.http.Cache-Control ~ "(no-cache|no-store)") {
+    return (pass);
+  }
+
+  # Do not allow outside access to cron.php or install.php. Depending on your access to the server, you might want to comment-out this block of code for development.
+  if (req.url ~ "^/(cron|install)\.php$" && !client.ip ~ internal) {        
+    # Throw error directly: 
+    error 404 "Page not found.";
+    # Or;
+    # Use a custom error page on path /error-404. 
+    # set req.url = "/error-404";
+  } 
+
+  if (req.http.Cookie) {
+    set req.http.Cookie = ";" + req.http.Cookie;
+    set req.http.Cookie = regsuball(req.http.Cookie, "; +", ";");
+    set req.http.Cookie = regsuball(req.http.Cookie, ";(S{1,2}ESS[a-z0-9]+|NO_CACHE)=", "; \1=");
+    set req.http.Cookie = regsuball(req.http.Cookie, ";[^ ][^;]*", "");
+    set req.http.Cookie = regsuball(req.http.Cookie, "^[; ]+|[; ]+$", "");
+      
+    # Remove the "has_js" cookie
+    set req.http.Cookie = regsuball(req.http.Cookie, "has_js=[^;]+(; )?", "");
+    # Remove the "Drupal.toolbar.collapsed" cookie
+    set req.http.Cookie = regsuball(req.http.Cookie, "Drupal.toolbar.collapsed=[^;]+(; )?", "");
+    # Remove AdminToolbar cookie for drupal6
+    set req.http.Cookie = regsuball(req.http.Cookie, "DrupalAdminToolbar=[^;]+(; )?", "");
+    # Remove any Google Analytics based cookies
+    set req.http.Cookie = regsuball(req.http.Cookie, "__utm.=[^;]+(; )?", "");
+    # Remove the Quant Capital cookies (added by some plugin, all __qca)
+    set req.http.Cookie = regsuball(req.http.Cookie, "__qc.=[^;]+(; )?", "");
+
+
+    # If there are no remaining cookies, remove the cookie header. If there
+    # aren't any cookie headers, Varnish's default behavior will be to cache
+    # the page.
+    if (req.http.Cookie == "") {
+      unset req.http.Cookie;
+    }
+      
+    # If there are any cookies left (a session or NO_CACHE cookie), do not
+    # cache the page; pass it on to Apache directly.
+    else {
+      return (pass);
+    }
+  }
+
+  # Do not cache these URL paths.
+  if (req.url ~ "^/status\.php$" ||
+      req.url ~ "^/update\.php$" ||
+      req.url ~ "^/ooyala/ping$" ||
+      req.url ~ "^/admin"        ||
+      req.url ~ "^/admin/.*$"    ||
+      req.url ~ "^/user"         ||
+      req.url ~ "^/user/.*$"     ||
+      req.url ~ "^/users/.*$"    ||
+      req.url ~ "^/info/.*$"     ||
+      req.url ~ "^/flag/.*$"     ||
+      req.url ~ "^.*/ajax$"      ||
+      req.url ~ "^.*/ajax/.*$"   ||
+      req.url ~ "^.*/ahah/.*$") {
+      return (pass);
+  }        
+
+  # !! Do not cache application area
+  if (req.url ~ "(^/app.php|^/app_dev.php|^)/([a-z]{2})/(payment|order|booking|media|autocomplete|monitor).*") {
+    return (pass);
+  }
+
+  # !! Do not cache admin area
+  if (req.url ~ "(^/app.php|^/app_dev.php|^)/admin" || req.url ~ "(^/app.php|^/app_dev.php|^)/(([a-z]{2})/admin)") {
+    return (pass);
+  }
+
+  # !! Do not cache security area
+  if (req.url ~ "(^/app.php|^/app_dev.php|^)/(([a-z]{2}/|)(login|logout|login_check).*)") {
+      return (pass);
+  }
+
+  return (lookup);
+}
+
+sub vcl_hit {
+  if (req.request == "PURGE") {
+    purge;
+    error 200 "Purged.";
+  }
+}
+
+sub vcl_miss {
+  if (req.request == "PURGE") {
+    purge;
+    error 200 "Purged.";
+  }
+}
+
+sub vcl_fetch {
+
+  # You don't wish to cache content for logged in users
+  if (req.http.Cookie ~ "(SESS)") {
+      set beresp.http.X-Cacheable = "NO:Got Session";
+      return(hit_for_pass);
+  
+  # You are respecting the Cache-Control=private header from the backend
+  } elsif (beresp.http.Cache-Control ~ "private") {
+      set beresp.http.X-Cacheable = "NO:Cache-Control=private";
+      return(hit_for_pass);
+
+  } elsif (beresp.http.Cache-Control ~ "no-cache") {
+      set beresp.http.X-Cacheable = "NO:Cache-Control=no-cache";
+      return(hit_for_pass);
+  
+  # Varnish determined the object was not cacheable
+  } elsif (beresp.ttl <= 0s) {
+      set beresp.http.X-Cacheable = "NO:Not Cacheable";
+  
+  # Varnish determined the object was cacheable
+  } else {
+      set beresp.http.X-Cacheable = "YES";
+  }
+  
+  return(deliver);
+}
