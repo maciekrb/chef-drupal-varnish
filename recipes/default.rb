@@ -1,5 +1,5 @@
 # vim set ft=ruby
-# Cookbook Name:: drupal-varnish
+# Cookbook Name:: drupal_varnish
 # Recipe:: default
 #
 # Copyright (C) 2015 YOUR_NAME
